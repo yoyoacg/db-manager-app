@@ -1,0 +1,34 @@
+{
+  "id": "opensearch",
+  "displayName": "OpenSearch",
+  "description": "Elasticsearch 兼容的开源搜索与分析数据库。Windows 压缩包自带 JDK，默认以单节点且关闭安全插件的方式启动。",
+  "source": {
+    "type": "http",
+    "versions": {
+      "3.7.0": "https://artifacts.opensearch.org/releases/bundle/opensearch/3.7.0/opensearch-3.7.0-windows-x64.zip"
+    }
+  },
+  "install": { "binPath": "bin/opensearch.bat" },
+  "config": {
+    "file": "config/opensearch.yml",
+    "template": [
+      "cluster.name: db-service-manager",
+      "node.name: {version}",
+      "path.data: {dataDir}",
+      "path.logs: {dataDir}/logs",
+      "network.host: 127.0.0.1",
+      "http.port: {port}",
+      "discovery.type: single-node",
+      "plugins.security.disabled: true"
+    ]
+  },
+  "runtime": {
+    "startArgs": [],
+    "port": 9201,
+    "startTimeoutMs": 60000,
+    "env": {
+      "OPENSEARCH_JAVA_HOME": "{installDir}/jdk",
+      "OPENSEARCH_JAVA_OPTS": "-Xms512m -Xmx512m"
+    }
+  }
+}

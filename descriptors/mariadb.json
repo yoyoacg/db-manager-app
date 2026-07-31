@@ -1,0 +1,39 @@
+{
+  "id": "mariadb",
+  "displayName": "MariaDB",
+  "description": "MySQL 兼容的开源关系型数据库。首次启动自动初始化数据目录，配置文件 my.ini 可在「配置」中编辑。",
+  "source": {
+    "type": "http",
+    "versions": {
+      "10.11.8": "https://archive.mariadb.org/mariadb-10.11.8/winx64-packages/mariadb-10.11.8-winx64.zip",
+      "11.4.2": "https://archive.mariadb.org/mariadb-11.4.2/winx64-packages/mariadb-11.4.2-winx64.zip"
+    }
+  },
+  "install": {
+    "binPath": "bin/mariadbd.exe",
+    "postInstall": [
+      { "exe": "bin/mariadbd.exe", "args": ["--initialize-insecure", "--datadir={dataDir}"] }
+    ]
+  },
+  "config": {
+    "file": "my.ini",
+    "template": [
+      "[mariadbd]",
+      "port={port}",
+      "basedir={installDir}",
+      "datadir={dataDir}",
+      "character-set-server=utf8mb4",
+      "collation-server=utf8mb4_unicode_ci",
+      "max_connections=200",
+      "log-error={dataDir}/mariadb-error.log",
+      "",
+      "[client]",
+      "port={port}"
+    ]
+  },
+  "runtime": {
+    "startArgs": ["--defaults-file={configFile}", "--console"],
+    "port": 3307,
+    "startTimeoutMs": 30000
+  }
+}

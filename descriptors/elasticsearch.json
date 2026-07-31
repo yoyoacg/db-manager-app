@@ -1,0 +1,32 @@
+{
+  "id": "elasticsearch",
+  "displayName": "Elasticsearch",
+  "description": "分布式搜索与分析数据库。Windows 压缩包内含运行环境，默认以单节点模式启动；配置文件 elasticsearch.yml 可在「配置」中编辑。",
+  "source": {
+    "type": "http",
+    "versions": {
+      "8.15.3": "https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.15.3-windows-x86_64.zip"
+    }
+  },
+  "install": { "binPath": "bin/elasticsearch.bat" },
+  "config": {
+    "file": "config/elasticsearch.yml",
+    "template": [
+      "cluster.name: db-service-manager",
+      "node.name: {version}",
+      "path.data: {dataDir}",
+      "path.logs: {dataDir}/logs",
+      "network.host: 127.0.0.1",
+      "http.port: {port}",
+      "discovery.type: single-node",
+      "xpack.security.enabled: false",
+      "xpack.security.enrollment.enabled: false"
+    ]
+  },
+  "runtime": {
+    "startArgs": [],
+    "port": 9200,
+    "startTimeoutMs": 60000,
+    "env": { "ES_JAVA_OPTS": "-Xms512m -Xmx512m" }
+  }
+}
