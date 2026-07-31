@@ -1,8 +1,8 @@
 import { spawn, exec } from 'node:child_process'
 import net from 'node:net'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { externalDataDir } from './store'
 import {
   candidatePorts,
   effectivePort,
@@ -14,8 +14,8 @@ import {
   ServiceDescriptor
 } from './registry'
 
-/** TCP 探测端口是否可达（本地服务探活 / 远程连接探测通用） */
-export function checkPort(port: number, host = '127.0.0.1', timeout = 800): Promise<boolean> {
+/** 使用指定地址执行一次 TCP 探测。 */
+function checkPortAtHost(port: number, host: string, timeout: number): Promise<boolean> {
   return new Promise((resolve) => {
     const sock = new net.Socket()
     let done = false
@@ -36,6 +36,14 @@ export function checkPort(port: number, host = '127.0.0.1', timeout = 800): Prom
       finish(false)
     }
   })
+}
+
+/** TCP 探测端口是否可达（本地服务探活 / 远程连接探测通用）。
+ * 本地服务可能只监听 IPv6 通配地址 ::，因此 IPv4 回环失败后补探测 ::1。
+ */
+export async function checkPort(port: number, host = '127.0.0.1', timeout = 800): Promise<boolean> {
+  if (await checkPortAtHost(port, host, timeout)) return true
+  return host === '127.0.0.1' ? checkPortAtHost(port, '::1', timeout) : false
 }
 
 /** Windows 下通过 netstat 反查监听端口的 PID */
@@ -65,6 +73,94 @@ export async function waitForPort(port: number, timeoutMs = 20000): Promise<bool
   return false
 }
 
+/** 读取 Windows 服务的可执行文件路径，用于识别安装器创建的外部服务。 */
+function getWindowsServiceBinaryPath(name: string): Promise<string | null> {
+  if (process.platform !== 'win32') return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const child = spawn('sc.exe', ['qc', name], { windowsHide: true })
+    let out = ''
+    child.stdout?.on('data', (chunk) => (out += chunk))
+    child.on('error', () => resolve(null))
+    child.on('exit', (code) => {
+      if (code !== 0) return resolve(null)
+      const line = out.match(/BINARY_PATH_NAME\s*:\s*(.+)/i)?.[1]?.trim()
+      if (!line) return resolve(null)
+      // 安装器通常会给含空格的 exe 路径加引号；无引号路径仅支持无空格场景。
+      const quoted = line.match(/"([^"]+\.exe)"/i)?.[1]
+      const plain = line.match(/^([^\s]+\.exe)/i)?.[1]
+      resolve(quoted ?? plain ?? null)
+    })
+  })
+}
+
+/** 扫描描述符声明的 Windows 服务，并转换为可登记的安装目录。 */
+export async function scanExternalWindowsServices(): Promise<
+  { id: string; version: string; path: string; serviceName: string }[]
+> {
+  if (process.platform !== 'win32') return []
+  const found: { id: string; version: string; path: string; serviceName: string }[] = []
+  for (const d of getDescriptors()) {
+    const serviceName = d.runtime?.windowsServiceName
+    if (!serviceName || !d.install) continue
+    const exe = await getWindowsServiceBinaryPath(serviceName)
+    if (!exe) continue
+    const suffix = d.install.binPath.replace(/\//g, '\\').toLowerCase()
+    const normalized = path.normalize(exe)
+    const index = normalized.toLowerCase().lastIndexOf(suffix)
+    if (index < 0) continue
+    const installDir = normalized.slice(0, index).replace(/[\\/]$/, '')
+    if (!fs.existsSync(path.join(installDir, d.install.binPath))) continue
+    found.push({ id: d.id, version: path.basename(installDir), path: installDir, serviceName })
+  }
+  return found
+}
+
+/** 查询 Windows 服务状态；服务不存在或当前平台不支持时返回 null。 */
+function getWindowsServiceState(name: string): Promise<'RUNNING' | 'STOPPED' | 'OTHER' | null> {
+  if (process.platform !== 'win32') return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const child = spawn('sc.exe', ['query', name], { windowsHide: true })
+    let out = ''
+    child.stdout?.on('data', (chunk) => (out += chunk))
+    child.on('error', () => resolve(null))
+    child.on('exit', (code) => {
+      if (code !== 0) return resolve(null)
+      if (/STATE\s*:\s*\d+\s+RUNNING/i.test(out)) return resolve('RUNNING')
+      if (/STATE\s*:\s*\d+\s+STOPPED/i.test(out)) return resolve('STOPPED')
+      resolve('OTHER')
+    })
+  })
+}
+
+/** 向 Windows 服务控制器发送启停命令，参数以数组传递，避免拼接命令行。 */
+async function controlWindowsService(action: 'start' | 'stop', name: string): Promise<boolean> {
+  const direct = await new Promise<{ ok: boolean; accessDenied: boolean }>((resolve) => {
+    const child = spawn('sc.exe', [action, name], { windowsHide: true })
+    let output = ''
+    child.stdout?.on('data', (chunk) => (output += chunk))
+    child.stderr?.on('data', (chunk) => (output += chunk))
+    child.on('error', () => resolve({ ok: false, accessDenied: false }))
+    child.on('exit', (code) => {
+      resolve({
+        ok: code === 0,
+        accessDenied: code === 5 || /access is denied|拒绝访问/i.test(output)
+      })
+    })
+  })
+  if (direct.ok || !direct.accessDenied || process.platform !== 'win32') return direct.ok
+
+  // 普通账户无服务启停权限时触发一次 UAC，仅提升 sc.exe，不提升整个应用进程。
+  if (!/^[\w.-]+$/.test(name)) return false
+  return new Promise((resolve) => {
+    const command = `$p = Start-Process -FilePath 'sc.exe' -ArgumentList '${action}', '${name}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode`
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      windowsHide: true
+    })
+    child.on('error', () => resolve(false))
+    child.on('exit', (code) => resolve(code === 0))
+  })
+}
+
 function runOnce(exe: string, args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const p = spawn(exe, args, { cwd, windowsHide: true })
@@ -77,6 +173,24 @@ function runOnce(exe: string, args: string[], cwd: string): Promise<string> {
     })
     p.on('error', reject)
   })
+}
+
+/** 使用 wscript 在隐藏窗口中脱离启动控制台程序，避免 PowerShell 改变服务的启动行为。 */
+function getHiddenLauncherScript(): string {
+  const scriptPath = path.join(os.tmpdir(), 'db-service-manager-hidden-launch.vbs')
+  const script = [
+    'Set shell = CreateObject("WScript.Shell")',
+    'shell.CurrentDirectory = WScript.Arguments(1)',
+    'command = """" & Replace(WScript.Arguments(0), """", """""") & """"',
+    'For i = 2 To WScript.Arguments.Count - 1',
+    '  command = command & " " & """" & Replace(WScript.Arguments(i), """", """""") & """"',
+    'Next',
+    'shell.Run command, 0, False'
+  ].join('\r\n')
+  if (!fs.existsSync(scriptPath) || fs.readFileSync(scriptPath, 'utf-8') !== script) {
+    fs.writeFileSync(scriptPath, script, 'utf-8')
+  }
+  return scriptPath
 }
 
 export async function startService(id: string, version: string) {
@@ -92,20 +206,32 @@ export async function startService(id: string, version: string) {
   const { installDir, external } = resolved
   const exe = path.join(installDir, d.install.binPath)
 
-  // 启动前确保配置文件存在（首次按模板生成），端口以配置文件为准（用户可能改过）
-  const configFile = ensureConfigFile(id, version)
-  const port = effectivePort(id, version) ?? d.runtime.port
+  // 外部登记目录保持其原有安装状态，直接运行可执行文件，不生成配置或追加启动参数。
+  const configFile = external ? null : ensureConfigFile(id, version)
+  const port = external ? d.runtime.port : effectivePort(id, version) ?? d.runtime.port
   if (await checkPort(port)) {
     return { already: true, port }
   }
 
-  // 外部登记的安装（如 Program Files 下）数据目录放 userData，避免写权限问题
-  const dataDir = external ? externalDataDir(id, version) : path.join(installDir, 'data')
-  fs.mkdirSync(dataDir, { recursive: true })
+  // 由安装器注册的外部服务（如 MongoDB）优先交给 Windows 服务控制器管理。
+  if (external && d.runtime.windowsServiceName) {
+    const state = await getWindowsServiceState(d.runtime.windowsServiceName)
+    if (state) {
+      if (state !== 'RUNNING' && !(await controlWindowsService('start', d.runtime.windowsServiceName))) {
+        throw new Error(`${d.displayName} Windows 服务启动失败；如出现 UAC 提示请允许授权，否则请检查服务权限或系统服务日志`)
+      }
+      const ok = await waitForPort(port, d.runtime.startTimeoutMs ?? 20000)
+      if (!ok) throw new Error(`${d.displayName} Windows 服务已启动，但端口 ${port} 未就绪`)
+      return { already: false, port, windowsService: true }
+    }
+  }
+
+  const dataDir = external ? '' : path.join(installDir, 'data')
+  if (!external) fs.mkdirSync(dataDir, { recursive: true })
   const vars = { dataDir, port: String(port), installDir, version, configFile: configFile ?? '' }
 
-  // 首次启动：数据目录为空时执行 postInstall 初始化（如 mysqld --initialize-insecure / initdb）
-  const initialized = fs.readdirSync(dataDir).length > 0
+  // 仅管理器下载的目录执行首次初始化，外部目录不得改写其数据目录。
+  const initialized = external || fs.readdirSync(dataDir).length > 0
   if (!initialized && d.install.postInstall) {
     for (const step of d.install.postInstall) {
       const stepExe = path.join(installDir, step.exe)
@@ -114,13 +240,27 @@ export async function startService(id: string, version: string) {
     }
   }
 
-  const args = d.runtime.startArgs.map((a) => tpl(a, vars))
-  const child = spawn(exe, args, {
-    cwd: installDir,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true
-  })
+  const args = external ? [] : d.runtime.startArgs.map((a) => tpl(a, vars))
+  // 描述符可为特殊服务注入运行时参数，例如 Elasticsearch 的 JVM 内存限制。
+  const env = d.runtime.env
+    ? Object.fromEntries(Object.entries(d.runtime.env).map(([key, value]) => [key, tpl(value, vars)]))
+    : {}
+  const launchWithWscript = process.platform === 'win32'
+  const child = spawn(
+    launchWithWscript ? 'wscript.exe' : exe,
+    launchWithWscript
+      ? ['//B', getHiddenLauncherScript(), exe, installDir, ...args]
+      : args,
+    {
+      cwd: installDir,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env, ...env },
+      // Windows 通过 wscript 以隐藏窗口启动控制台程序，避免 mysqld 等弹出 CMD 窗口。
+      shell: false
+    }
+  )
   child.unref()
 
   const ok = await waitForPort(port, d.runtime.startTimeoutMs ?? 20000)
@@ -134,6 +274,22 @@ export async function stopService(id: string) {
   const d = getDescriptor(id)
   if (!d || d.connectionOnly || !d.runtime) {
     throw new Error('该条目不支持停止操作')
+  }
+  // 外部安装的 MongoDB 等服务由 Windows 服务控制器停止，避免直接结束其进程。
+  if (d.runtime.windowsServiceName) {
+    const state = await getWindowsServiceState(d.runtime.windowsServiceName)
+    if (state && state !== 'STOPPED') {
+      if (!(await controlWindowsService('stop', d.runtime.windowsServiceName))) {
+        throw new Error(`${d.displayName} Windows 服务停止失败；如出现 UAC 提示请允许授权，否则请检查服务权限或系统服务日志`)
+      }
+      const start = Date.now()
+      while (Date.now() - start < 5000) {
+        const ports = candidatePorts(id)
+        if (!(await Promise.all(ports.map((p) => checkPort(p)))).some(Boolean)) break
+        await new Promise((r) => setTimeout(r, 300))
+      }
+      return { stopped: true, windowsService: true }
+    }
   }
   // 用户可能在配置文件里改过端口，遍历全部候选端口找监听进程
   let pid: number | null = null

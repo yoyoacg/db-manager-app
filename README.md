@@ -13,6 +13,7 @@ Windows 桌面端多数据库服务一键管理器。**描述符驱动**：每�
 - **配置文件可编辑（phpStudy 式）**：每个服务自动生成默认配置（my.ini / redis.conf / mongod.cfg / postgresql.conf），界面内直接编辑、保存、恢复默认，重启生效
 - **端口联动**：配置文件中改端口后，启动探活、停止、状态灯自动以配置端口为准
 - **首次启动自动初始化**：数据目录为空时自动执行初始化（`mysqld --initialize-insecure`、`initdb` 等），日志写入数据目录便于排查
+- **外部 Windows 服务管理**：可扫描并登记安装器注册的 MongoDB 服务，启停时优先通过 Windows 服务控制器；普通账户无权限时会请求 UAC 授权。未注册为系统服务时直接运行安装目录中的可执行文件，不追加参数、不生成配置或初始化数据
 - **自定义描述符**：放入 userData 的 `descriptors/*.json` 即可新增或覆盖内置服务，无需改代码
 
 ## 内置服务
@@ -20,9 +21,12 @@ Windows 桌面端多数据库服务一键管理器。**描述符驱动**：每�
 | 服务 | 默认端口 | 配置文件 | 说明 |
 |---|---|---|---|
 | MySQL | 3306 | my.ini | 首启自动 `--initialize-insecure`，root 无密码 |
+| MariaDB | 3307 | my.ini | MySQL 兼容，首启自动 `--initialize-insecure` |
 | Redis | 6379 | redis.conf | 版本列表取自 tporadowski/redis Releases |
 | MongoDB | 27017 | mongod.cfg | 解压即用 |
 | PostgreSQL | 5432 | postgresql.conf | 首启自动 `initdb`，postgres 用户 trust 认证 |
+| Elasticsearch | 9200 | elasticsearch.yml | 单节点搜索与分析数据库，默认关闭安全认证 |
+| OpenSearch | 9201 | opensearch.yml | Windows 包自带 JDK，单节点搜索与分析数据库 |
 | ClickHouse | 8123 | — | 远程连接条目（官方无原生 Windows 服务端） |
 | TDengine | 6030 | — | 远程连接条目，状态灯探测连通性 |
 
@@ -33,6 +37,7 @@ npm install
 npm run dev      # 开发模式（热更新）
 npm run build    # 构建到 out/
 npm run preview  # 预览构建产物
+npm run package:win # 生成 Windows x64 安装程序（release/）
 ```
 
 技术栈：Electron 30 + Vue 3 + TypeScript + electron-vite 2。

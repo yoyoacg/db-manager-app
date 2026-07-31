@@ -9,6 +9,9 @@ import mongodb from '../../descriptors/mongodb.json'
 import postgresql from '../../descriptors/postgresql.json'
 import clickhouse from '../../descriptors/clickhouse.json'
 import tdengine from '../../descriptors/tdengine.json'
+import mariadb from '../../descriptors/mariadb.json'
+import elasticsearch from '../../descriptors/elasticsearch.json'
+import opensearch from '../../descriptors/opensearch.json'
 
 export interface PostInstallStep {
   exe: string
@@ -43,6 +46,10 @@ export interface ServiceDescriptor {
     startArgs: string[]
     port: number
     startTimeoutMs?: number
+    /** 启动时注入的环境变量（值支持占位符），如 ES_JAVA_OPTS */
+    env?: Record<string, string>
+    /** 外部安装包通过 Windows 服务安装时的服务名；存在时优先使用服务启停 */
+    windowsServiceName?: string
   }
 }
 
@@ -52,7 +59,17 @@ export interface InstalledVersion {
   path: string
 }
 
-const builtins = [mysql, redis, mongodb, postgresql, clickhouse, tdengine] as ServiceDescriptor[]
+const builtins = [
+  mysql,
+  mariadb,
+  redis,
+  mongodb,
+  postgresql,
+  elasticsearch,
+  opensearch,
+  clickhouse,
+  tdengine
+] as ServiceDescriptor[]
 
 /** 全部描述符：内置 + 用户目录下自定义 JSON（同 id 覆盖内置） */
 export function getDescriptors(): ServiceDescriptor[] {
@@ -220,12 +237,18 @@ export function resetConfig(id: string, version: string): { path: string; conten
   return { path: p, content }
 }
 
-/** 从配置文本解析端口：兼容 `port=3306` / `port 6379` / `port = 5432` / `port: 27017` */
+/** 从配置文本解析端口：优先精确 `port` 键（ini/conf/yaml），其次 `xxx.port` 键（如 ES 的 http.port） */
 export function parseConfPort(content: string): number | null {
-  const m = content.match(/^[ \t]*port[ \t]*[=: ][ \t]*(\d{2,5})\b/im)
-  if (!m) return null
-  const n = Number(m[1])
-  return n > 0 && n <= 65535 ? n : null
+  const pick = (re: RegExp): number | null => {
+    const m = content.match(re)
+    if (!m) return null
+    const n = Number(m[1])
+    return n > 0 && n <= 65535 ? n : null
+  }
+  return (
+    pick(/^[ \t]*port[ \t]*[=: ][ \t]*(\d{2,5})\b/im) ??
+    pick(/^[ \t]*[\w-]+\.port[ \t]*[=: ][ \t]*(\d{2,5})\b/im)
+  )
 }
 
 /** 某版本当前生效端口：优先取配置文件中的解析值（用户可能改过端口） */
@@ -250,6 +273,8 @@ export function candidatePorts(id: string): number[] {
   if (!d?.runtime) return []
   const set = new Set<number>([d.runtime.port])
   for (const v of getInstalledVersions(id)) {
+    // 外部登记目录直接按默认参数运行，不读取管理器生成的配置文件端口。
+    if (v.external) continue
     const p = resolveConfigPath(id, v.version)
     if (p && fs.existsSync(p)) {
       try {

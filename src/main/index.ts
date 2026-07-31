@@ -10,7 +10,12 @@ import {
   resolveInstall,
   writeConfig
 } from './registry'
-import { startService, stopService, getStatusMap } from './processManager'
+import {
+  startService,
+  stopService,
+  getStatusMap,
+  scanExternalWindowsServices
+} from './processManager'
 import { listRemoteVersions, downloadVersion, importZipToVersion } from './downloadManager'
 import { addExternalInstall, getConfig, setServicesRoot } from './store'
 
@@ -46,6 +51,11 @@ function registerIpc() {
     }))
   )
   ipcMain.handle('services:status', () => getStatusMap())
+  ipcMain.handle('services:scanWindows', async () => {
+    const found = await scanExternalWindowsServices()
+    for (const item of found) addExternalInstall(item)
+    return found
+  })
   ipcMain.handle('service:start', (_e, id: string, version: string) => startService(id, version))
   ipcMain.handle('service:stop', (_e, id: string) => stopService(id))
   ipcMain.handle('service:remoteVersions', (_e, id: string) => listRemoteVersions(id))

@@ -9,6 +9,7 @@ const statusMap = ref<Record<string, any>>({})
 const progressMap = ref<Record<string, any>>({})
 const root = ref('')
 const busyAll = ref(false)
+const scanningServices = ref(false)
 const globalError = ref('')
 
 let timer: any = null
@@ -71,6 +72,19 @@ async function saveRoot() {
   await refresh()
 }
 
+async function scanWindowsServices() {
+  scanningServices.value = true
+  globalError.value = ''
+  try {
+    const found = await api.scanWindowsServices()
+    if (!found.length) globalError.value = '未扫描到可登记的 Windows 数据库服务'
+    await refresh()
+  } catch (e: any) {
+    globalError.value = e?.message || String(e)
+  }
+  scanningServices.value = false
+}
+
 onMounted(async () => {
   const cfg = await api.getConfig()
   root.value = cfg.servicesRoot
@@ -99,6 +113,9 @@ onUnmounted(() => {
       <button class="btn" @click="saveRoot">保存</button>
     </div>
     <div class="header-actions">
+      <button class="btn" :disabled="scanningServices" @click="scanWindowsServices">
+        {{ scanningServices ? '扫描中…' : '扫描已安装服务' }}
+      </button>
       <button class="btn btn-primary" :disabled="busyAll" @click="startAll">全部启动</button>
       <button class="btn btn-danger" :disabled="busyAll" @click="stopAll">全部停止</button>
     </div>

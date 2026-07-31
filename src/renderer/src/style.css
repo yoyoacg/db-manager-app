@@ -287,6 +287,10 @@ select {
   padding: 6px 10px;
 }
 
+.connection-row {
+  margin-top: -2px;
+}
+
 /* ---- 配置编辑器弹窗 ---- */
 .conf-overlay {
   position: fixed;

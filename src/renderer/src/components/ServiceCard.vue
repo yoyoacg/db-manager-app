@@ -32,6 +32,10 @@ watch(
 )
 
 const running = computed(() => !!props.status?.running)
+const selectedInstall = computed(() =>
+  props.service.installed?.find((item: any) => item.version === selectedVersion.value)
+)
+const selectedExternal = computed(() => !!selectedInstall.value?.external)
 const downloading = computed(
   () => props.progress && (props.progress.stage === 'downloading' || props.progress.stage === 'extracting')
 )
@@ -156,9 +160,14 @@ async function doAddExternal() {
           </option>
         </select>
         <button class="link" @click="openDir(selectedVersion)">目录</button>
-        <button v-if="service.config" class="link" @click="showConfig = true">配置</button>
+        <button v-if="service.config && !selectedExternal" class="link" @click="showConfig = true">配置</button>
       </div>
       <div v-else class="empty-hint">尚未安装任何版本，可在下方下载或本地导入。</div>
+
+      <div class="row connection-row">
+        <label>连接地址</label>
+        <span class="remote-addr">127.0.0.1:{{ status?.port ?? service.runtime?.port }}</span>
+      </div>
 
       <div class="card-actions">
         <button

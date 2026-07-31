@@ -27,6 +27,7 @@
   "runtime": {
     "startArgs": ["--config", "{configFile}"],
     "port": 27017,
-    "startTimeoutMs": 30000
+    "startTimeoutMs": 30000,
+    "windowsServiceName": "MongoDB"
   }
 }

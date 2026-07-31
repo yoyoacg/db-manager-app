@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('dbapi', {
   listServices: () => ipcRenderer.invoke('services:list'),
   getStatus: () => ipcRenderer.invoke('services:status'),
+  scanWindowsServices: () => ipcRenderer.invoke('services:scanWindows'),
   start: (id: string, version: string) => ipcRenderer.invoke('service:start', id, version),
   stop: (id: string) => ipcRenderer.invoke('service:stop', id),
   remoteVersions: (id: string) => ipcRenderer.invoke('service:remoteVersions', id),
