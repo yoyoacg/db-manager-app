@@ -1,0 +1,47 @@
+{
+  "id": "mysql",
+  "displayName": "MySQL",
+  "description": "关系型数据库。首次启动自动执行 --initialize-insecure 初始化数据目录（root 无密码）。配置文件 my.ini 可在「配置」中编辑。",
+  "source": {
+    "type": "http",
+    "versions": {
+      "5.7.44": "https://downloads.mysql.com/archives/get/p/23/file/mysql-5.7.44-winx64.zip",
+      "8.0.36": "https://downloads.mysql.com/archives/get/p/23/file/mysql-8.0.36-winx64.zip",
+      "8.4.0": "https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-8.4.0-winx64.zip"
+    }
+  },
+  "install": {
+    "binPath": "bin/mysqld.exe",
+    "postInstall": [
+      { "exe": "bin/mysqld.exe", "args": ["--initialize-insecure", "--datadir={dataDir}"] }
+    ]
+  },
+  "config": {
+    "file": "my.ini",
+    "template": [
+      "[mysqld]",
+      "port={port}",
+      "basedir={installDir}",
+      "datadir={dataDir}",
+      "character-set-server=utf8mb4",
+      "collation-server=utf8mb4_unicode_ci",
+      "default-storage-engine=INNODB",
+      "max_connections=200",
+      "table_open_cache=400",
+      "tmp_table_size=32M",
+      "max_heap_table_size=32M",
+      "log-error={dataDir}/mysql-error.log",
+      "",
+      "[client]",
+      "port={port}",
+      "",
+      "[mysql]",
+      "default-character-set=utf8mb4"
+    ]
+  },
+  "runtime": {
+    "startArgs": ["--defaults-file={configFile}", "--console"],
+    "port": 3306,
+    "startTimeoutMs": 30000
+  }
+}

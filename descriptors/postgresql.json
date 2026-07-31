@@ -1,0 +1,43 @@
+{
+  "id": "postgresql",
+  "displayName": "PostgreSQL",
+  "description": "关系型数据库。使用 EDB 免安装压缩包，首次启动自动执行 initdb 初始化（postgres 用户，trust 认证）。配置文件 postgresql.conf 可在「配置」中编辑。",
+  "source": {
+    "type": "http",
+    "versions": {
+      "16.3": "https://get.enterprisedb.com/postgresql/postgresql-16.3-1-windows-x64-binaries.zip",
+      "15.7": "https://get.enterprisedb.com/postgresql/postgresql-15.7-1-windows-x64-binaries.zip"
+    }
+  },
+  "install": {
+    "binPath": "bin/postgres.exe",
+    "postInstall": [
+      { "exe": "bin/initdb.exe", "args": ["-D", "{dataDir}", "-U", "postgres", "-E", "UTF8", "--auth=trust"] }
+    ]
+  },
+  "config": {
+    "file": "postgresql.conf",
+    "template": [
+      "listen_addresses = 'localhost'",
+      "port = {port}",
+      "max_connections = 100",
+      "shared_buffers = 128MB",
+      "dynamic_shared_memory_type = windows",
+      "max_wal_size = 1GB",
+      "min_wal_size = 80MB",
+      "logging_collector = on",
+      "log_directory = 'log'",
+      "log_filename = 'postgresql-%Y-%m-%d.log'",
+      "log_timezone = 'Asia/Shanghai'",
+      "datestyle = 'iso, mdy'",
+      "timezone = 'Asia/Shanghai'",
+      "lc_messages = 'C'",
+      "default_text_search_config = 'pg_catalog.english'"
+    ]
+  },
+  "runtime": {
+    "startArgs": ["-D", "{dataDir}", "-c", "config_file={configFile}"],
+    "port": 5432,
+    "startTimeoutMs": 30000
+  }
+}

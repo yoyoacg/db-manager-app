@@ -1,0 +1,7 @@
+{
+  "id": "tdengine",
+  "displayName": "TDengine",
+  "description": "时序数据库。3.1 起官方仅提供 Windows 客户端（服务端需企业版），此条目用于管理远程服务器连接，状态灯实时探测连通性。",
+  "connectionOnly": true,
+  "connection": { "host": "127.0.0.1", "port": 6030 }
+}

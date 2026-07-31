@@ -1,0 +1,7 @@
+{
+  "id": "clickhouse",
+  "displayName": "ClickHouse",
+  "description": "列式分析数据库。官方无原生 Windows 版（需 WSL2），此条目用于管理远程服务器连接，状态灯实时探测连通性。",
+  "connectionOnly": true,
+  "connection": { "host": "127.0.0.1", "port": 8123 }
+}

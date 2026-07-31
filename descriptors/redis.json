@@ -1,0 +1,27 @@
+{
+  "id": "redis",
+  "displayName": "Redis",
+  "description": "内存键值数据库。Windows 版由 tporadowski/redis 维护，版本列表从 GitHub Releases 自动获取。配置文件 redis.conf 可在「配置」中编辑。",
+  "source": {
+    "type": "github",
+    "repo": "tporadowski/redis",
+    "assetPattern": "Redis-x64-{version}.zip"
+  },
+  "install": { "binPath": "redis-server.exe" },
+  "config": {
+    "file": "redis.conf",
+    "template": [
+      "bind 127.0.0.1",
+      "port {port}",
+      "dir \"{dataDir}\"",
+      "maxmemory 256mb",
+      "maxmemory-policy allkeys-lru",
+      "appendonly no",
+      "logfile \"{dataDir}/redis.log\""
+    ]
+  },
+  "runtime": {
+    "startArgs": ["{configFile}"],
+    "port": 6379
+  }
+}
