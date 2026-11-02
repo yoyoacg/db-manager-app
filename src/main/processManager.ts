@@ -64,9 +64,16 @@ export function findPidByPort(port: number): Promise<number | null> {
   })
 }
 
-export async function waitForPort(port: number, timeoutMs = 20000): Promise<boolean> {
+export async function waitForPort(
+  port: number,
+  timeoutMs = 20000,
+  startupError?: () => Error | undefined
+): Promise<boolean> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
+    // 启动进程提前退出时立即返回真实原因，避免只显示端口等待超时。
+    const error = startupError?.()
+    if (error) throw error
     if (await checkPort(port)) return true
     await new Promise((r) => setTimeout(r, 500))
   }
@@ -228,7 +235,11 @@ export async function startService(id: string, version: string) {
 
   const dataDir = external ? '' : path.join(installDir, 'data')
   if (!external) fs.mkdirSync(dataDir, { recursive: true })
-  const vars = { dataDir, port: String(port), installDir, version, configFile: configFile ?? '' }
+  // Cygwin 版 Redis 不接受命令行中的 Windows 绝对路径；以安装目录为 cwd 传相对路径，兼容旧版 Redis。
+  const runtimeConfigFile = id === 'redis' && configFile
+    ? `./${path.relative(installDir, configFile).replace(/\\/g, '/')}`
+    : configFile ?? ''
+  const vars = { dataDir, port: String(port), installDir, version, configFile: runtimeConfigFile }
 
   // 仅管理器下载的目录执行首次初始化，外部目录不得改写其数据目录。
   const initialized = external || fs.readdirSync(dataDir).length > 0
@@ -245,7 +256,15 @@ export async function startService(id: string, version: string) {
   const env = d.runtime.env
     ? Object.fromEntries(Object.entries(d.runtime.env).map(([key, value]) => [key, tpl(value, vars)]))
     : {}
-  const launchWithWscript = process.platform === 'win32'
+  // Redis 直接启动并接收输出，避免隐藏脚本吞掉 Cygwin 运行时的启动错误。
+  const directRedis = id === 'redis'
+  const launchWithWscript = process.platform === 'win32' && !directRedis
+  let output = ''
+  let launchError: Error | undefined
+  let exitDescription: string | undefined
+  const startupError = () => launchError ?? (exitDescription
+    ? new Error(`${d.displayName} 启动进程已退出（${exitDescription}）\n${output.trim() || '未输出错误信息，请检查 Redis 配置中的 logfile'}`)
+    : undefined)
   const child = spawn(
     launchWithWscript ? 'wscript.exe' : exe,
     launchWithWscript
@@ -253,19 +272,33 @@ export async function startService(id: string, version: string) {
       : args,
     {
       cwd: installDir,
-      detached: true,
-      stdio: 'ignore',
+      detached: !directRedis,
+      stdio: directRedis ? ['ignore', 'pipe', 'pipe'] : 'ignore',
       windowsHide: true,
       env: { ...process.env, ...env },
-      // Windows 通过 wscript 以隐藏窗口启动控制台程序，避免 mysqld 等弹出 CMD 窗口。
+      // Redis 使用 windowsHide 隐藏窗口，其他服务保留原有 wscript 启动方式。
       shell: false
     }
   )
+  child.on('error', (error) => {
+    launchError = new Error(`${d.displayName} 无法启动：${error.message}`)
+  })
+  if (directRedis) {
+    // 持续消费输出但只保留末尾，防止管道堵塞或长期运行时内存持续增长。
+    const capture = (chunk: Buffer) => { output = (output + chunk.toString('utf-8')).slice(-8192) }
+    child.stdout?.on('data', capture)
+    child.stderr?.on('data', capture)
+    child.on('exit', (code, signal) => {
+      exitDescription = signal ? `信号 ${signal}` : `退出码 ${code}`
+    })
+  }
   child.unref()
 
-  const ok = await waitForPort(port, d.runtime.startTimeoutMs ?? 20000)
+  const ok = await waitForPort(port, d.runtime.startTimeoutMs ?? 20000, startupError)
   if (!ok) {
-    throw new Error(`${d.displayName} 启动后端口 ${port} 未就绪，请检查数据目录或日志`)
+    throw startupError() ?? new Error(
+      `${d.displayName} 启动后端口 ${port} 未就绪，请检查数据目录或日志${output.trim() ? `\n${output.trim()}` : ''}`
+    )
   }
   return { already: false, port }
 }
