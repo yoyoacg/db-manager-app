@@ -160,7 +160,12 @@ async function doAddExternal() {
           </option>
         </select>
         <button class="link" @click="openDir(selectedVersion)">目录</button>
-        <button v-if="service.config && !selectedExternal" class="link" @click="showConfig = true">配置</button>
+        <!-- 托管数据的外部安装同样使用管理器配置，允许修改端口。 -->
+        <button
+          v-if="service.config && (!selectedExternal || service.runtime?.manageExternalData)"
+          class="link"
+          @click="showConfig = true"
+        >配置</button>
       </div>
       <div v-else class="empty-hint">尚未安装任何版本，可在下方下载或本地导入。</div>
 

@@ -9,10 +9,12 @@ import {
   ensureConfigFile,
   getDescriptor,
   getDescriptors,
+  getInstalledVersions,
   resolveInstall,
   tpl,
   ServiceDescriptor
 } from './registry'
+import { externalDataDir } from './store'
 
 /** 使用指定地址执行一次 TCP 探测。 */
 function checkPortAtHost(port: number, host: string, timeout: number): Promise<boolean> {
@@ -38,19 +40,21 @@ function checkPortAtHost(port: number, host: string, timeout: number): Promise<b
   })
 }
 
-/** TCP 探测端口是否可达（本地服务探活 / 远程连接探测通用）。
- * 本地服务可能只监听 IPv6 通配地址 ::，因此 IPv4 回环失败后补探测 ::1。
- */
+/** Windows 本机服务以系统监听记录为准，远程地址通过 TCP 探测。 */
 export async function checkPort(port: number, host = '127.0.0.1', timeout = 800): Promise<boolean> {
+  // 本机必须存在真实监听进程，避免仅凭连接成功就误报运行中；同时覆盖 IPv4 和 IPv6。
+  if (process.platform === 'win32' && host === '127.0.0.1') {
+    return (await findPidByPort(port)) !== null
+  }
   if (await checkPortAtHost(port, host, timeout)) return true
   return host === '127.0.0.1' ? checkPortAtHost(port, '::1', timeout) : false
 }
 
 /** Windows 下通过 netstat 反查监听端口的 PID */
 export function findPidByPort(port: number): Promise<number | null> {
-  return new Promise((resolve) => {
-    exec('netstat -ano -p tcp', { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return resolve(null)
+  return new Promise((resolve, reject) => {
+    exec('netstat -ano -p tcp', { maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, stdout) => {
+      if (err) return reject(err)
       for (const line of stdout.split(/\r?\n/)) {
         if (!line.includes('LISTENING')) continue
         const parts = line.trim().split(/\s+/)
@@ -176,7 +180,7 @@ function runOnce(exe: string, args: string[], cwd: string): Promise<string> {
     p.stderr?.on('data', (c) => (out += c))
     p.on('exit', (code) => {
       if (code === 0) resolve(out)
-      else reject(new Error(`退出码 ${code}: ${out.slice(-400)}`))
+      else reject(new Error(`${exe} 退出码 ${code}: ${out}`))
     })
     p.on('error', reject)
   })
@@ -212,10 +216,14 @@ export async function startService(id: string, version: string) {
   }
   const { installDir, external } = resolved
   const exe = path.join(installDir, d.install.binPath)
+  // 托管型外部安装（如 postgres）：数据目录与配置文件由管理器生成到 userData，
+  // 与内部安装共用启动流程；非托管外部目录保持其原有安装状态直接运行。
+  const managedExternal = external && d.runtime.manageExternalData === true
 
-  // 外部登记目录保持其原有安装状态，直接运行可执行文件，不生成配置或追加启动参数。
-  const configFile = external ? null : ensureConfigFile(id, version)
-  const port = external ? d.runtime.port : effectivePort(id, version) ?? d.runtime.port
+  const configFile = external && !managedExternal ? null : ensureConfigFile(id, version)
+  const port = external && !managedExternal
+    ? d.runtime.port
+    : effectivePort(id, version) ?? d.runtime.port
   if (await checkPort(port)) {
     return { already: true, port }
   }
@@ -233,16 +241,20 @@ export async function startService(id: string, version: string) {
     }
   }
 
-  const dataDir = external ? '' : path.join(installDir, 'data')
-  if (!external) fs.mkdirSync(dataDir, { recursive: true })
+  const dataDir = external && !managedExternal
+    ? ''
+    : external
+      ? externalDataDir(id, version)
+      : path.join(installDir, 'data')
+  if (dataDir) fs.mkdirSync(dataDir, { recursive: true })
   // Cygwin 版 Redis 不接受命令行中的 Windows 绝对路径；以安装目录为 cwd 传相对路径，兼容旧版 Redis。
   const runtimeConfigFile = id === 'redis' && configFile
     ? `./${path.relative(installDir, configFile).replace(/\\/g, '/')}`
     : configFile ?? ''
   const vars = { dataDir, port: String(port), installDir, version, configFile: runtimeConfigFile }
 
-  // 仅管理器下载的目录执行首次初始化，外部目录不得改写其数据目录。
-  const initialized = external || fs.readdirSync(dataDir).length > 0
+  // 仅管理器下载的目录与托管型外部安装执行首次初始化；非托管外部目录不得改写其数据目录。
+  const initialized = (external && !managedExternal) || fs.readdirSync(dataDir).length > 0
   if (!initialized && d.install.postInstall) {
     for (const step of d.install.postInstall) {
       const stepExe = path.join(installDir, step.exe)
@@ -251,19 +263,21 @@ export async function startService(id: string, version: string) {
     }
   }
 
-  const args = external ? [] : d.runtime.startArgs.map((a) => tpl(a, vars))
+  const args = external && !managedExternal
+    ? []
+    : d.runtime.startArgs.map((a) => tpl(a, vars))
   // 描述符可为特殊服务注入运行时参数，例如 Elasticsearch 的 JVM 内存限制。
   const env = d.runtime.env
     ? Object.fromEntries(Object.entries(d.runtime.env).map(([key, value]) => [key, tpl(value, vars)]))
     : {}
-  // Redis 直接启动并接收输出，避免隐藏脚本吞掉 Cygwin 运行时的启动错误。
-  const directRedis = id === 'redis'
-  const launchWithWscript = process.platform === 'win32' && !directRedis
+  // Redis 和 PostgreSQL 直接启动并接收输出，避免隐藏脚本丢失启动错误。
+  const directOutput = id === 'redis' || id === 'postgresql'
+  const launchWithWscript = process.platform === 'win32' && !directOutput
   let output = ''
   let launchError: Error | undefined
   let exitDescription: string | undefined
   const startupError = () => launchError ?? (exitDescription
-    ? new Error(`${d.displayName} 启动进程已退出（${exitDescription}）\n${output.trim() || '未输出错误信息，请检查 Redis 配置中的 logfile'}`)
+    ? new Error(`${d.displayName} 启动进程已退出（${exitDescription}）\n${output.trim()}`)
     : undefined)
   const child = spawn(
     launchWithWscript ? 'wscript.exe' : exe,
@@ -272,18 +286,18 @@ export async function startService(id: string, version: string) {
       : args,
     {
       cwd: installDir,
-      detached: !directRedis,
-      stdio: directRedis ? ['ignore', 'pipe', 'pipe'] : 'ignore',
+      detached: !directOutput,
+      stdio: directOutput ? ['ignore', 'pipe', 'pipe'] : 'ignore',
       windowsHide: true,
       env: { ...process.env, ...env },
-      // Redis 使用 windowsHide 隐藏窗口，其他服务保留原有 wscript 启动方式。
+      // 直接启动的服务使用 windowsHide 隐藏窗口。
       shell: false
     }
   )
   child.on('error', (error) => {
     launchError = new Error(`${d.displayName} 无法启动：${error.message}`)
   })
-  if (directRedis) {
+  if (directOutput) {
     // 持续消费输出但只保留末尾，防止管道堵塞或长期运行时内存持续增长。
     const capture = (chunk: Buffer) => { output = (output + chunk.toString('utf-8')).slice(-8192) }
     child.stdout?.on('data', capture)
@@ -335,14 +349,38 @@ export async function stopService(id: string) {
     }
   }
   if (!pid) return { stopped: false, reason: 'not-running' }
-  await new Promise<void>((resolve) => {
-    exec(`taskkill /F /PID ${pid}`, () => resolve())
-  })
+  if (id === 'postgresql') {
+    // 根据数据目录记录的端口定位实例，使用 pg_ctl 正常关闭并等待完成。
+    for (const installed of getInstalledVersions(id)) {
+      const dataDir = installed.external
+        ? externalDataDir(id, installed.version)
+        : path.join(installed.path, 'data')
+      const pidFile = path.join(dataDir, 'postmaster.pid')
+      if (!fs.existsSync(pidFile)) continue
+      const clusterPort = Number(fs.readFileSync(pidFile, 'utf-8').split(/\r?\n/)[3])
+      if (clusterPort !== usedPort) continue
+      await runOnce(
+        path.join(installed.path, 'bin', 'pg_ctl.exe'),
+        ['stop', '-D', dataDir, '-m', 'fast', '-w', '-t', '20'],
+        installed.path
+      )
+      if (await checkPort(usedPort)) {
+        throw new Error(`PostgreSQL 停止后端口 ${usedPort} 仍在监听`)
+      }
+      return { stopped: true, pid }
+    }
+    throw new Error(`未找到端口 ${usedPort} 对应的 PostgreSQL 数据目录，无法停止`)
+  }
+  // 进程命令失败时保留错误输出，不再静默报告停止成功。
+  await runOnce('taskkill', ['/F', '/PID', String(pid)], process.cwd())
   // 等端口真正释放
   const start = Date.now()
   while (Date.now() - start < 5000) {
     if (!(await checkPort(usedPort))) break
     await new Promise((r) => setTimeout(r, 300))
+  }
+  if (await checkPort(usedPort)) {
+    throw new Error(`${d.displayName} 停止后端口 ${usedPort} 仍在监听`)
   }
   return { stopped: true, pid }
 }

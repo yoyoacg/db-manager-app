@@ -50,6 +50,9 @@ export interface ServiceDescriptor {
     env?: Record<string, string>
     /** 外部安装包通过 Windows 服务安装时的服务名；存在时优先使用服务启停 */
     windowsServiceName?: string
+    /** 外部登记目录也由管理器托管：数据目录与配置文件放 userData，首次自动初始化，并按 startArgs 启动。
+     *  适用于 postgres 等无参数即退出的程序；缺省时外部目录按原样直接运行可执行文件。 */
+    manageExternalData?: boolean
   }
 }
 
@@ -273,8 +276,9 @@ export function candidatePorts(id: string): number[] {
   if (!d?.runtime) return []
   const set = new Set<number>([d.runtime.port])
   for (const v of getInstalledVersions(id)) {
-    // 外部登记目录直接按默认参数运行，不读取管理器生成的配置文件端口。
-    if (v.external) continue
+    // 外部登记目录直接按默认参数运行，不读取管理器生成的配置文件端口；
+    // 托管型外部安装（manageExternalData）的端口以管理器配置为准。
+    if (v.external && d.runtime?.manageExternalData !== true) continue
     const p = resolveConfigPath(id, v.version)
     if (p && fs.existsSync(p)) {
       try {

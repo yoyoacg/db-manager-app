@@ -38,6 +38,7 @@
   "runtime": {
     "startArgs": ["-D", "{dataDir}", "-c", "config_file={configFile}"],
     "port": 5432,
-    "startTimeoutMs": 30000
+    "startTimeoutMs": 30000,
+    "manageExternalData": true
   }
 }
